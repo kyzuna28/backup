@@ -117,8 +117,8 @@ unsigned int sysctl_sched_use_walt_task_util = 1;
 enum sched_tunable_scaling sysctl_sched_tunable_scaling = SCHED_TUNABLESCALING_NONE;
 #else 
 enum sched_tunable_scaling sysctl_sched_tunable_scaling
-	= SCHED_TUNABLESCALING_LOG;
-#endif 
+	= SCHED_TUNABLESCALING_LINEAR;
+#endif
 
 /*
  * Minimal preemption granularity for CPU-bound tasks:
