@@ -812,6 +812,9 @@ endif
 ifeq ($(cc-name),clang)
 KBUILD_CFLAGS += -mcpu=cortex-a55 -mtune=cortex-a55 -march=armv8.2-a+crypto
 KBUILD_AFLAGS += -mcpu=cortex-a55 -mtune=cortex-a55 -march=armv8.2-a+crypto
+
+KBUILD_CFLAGS	+= -mllvm -hot-cold-split=true
+
 else
 KBUILD_CFLAGS += -mcpu=cortex-a75.cortex-a55 -mtune=cortex-a75.cortex-a55 -march=armv8.2-a
 KBUILD_AFLAGS += -mcpu=cortex-a75.cortex-a55 -mtune=cortex-a75.cortex-a55 -march=armv8.2-a
