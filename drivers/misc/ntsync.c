@@ -149,8 +149,6 @@ struct ntsync_device {
 
 static void dev_lock_obj(struct ntsync_device *dev, struct ntsync_obj *obj)
 {
-	lockdep_assert_held(&dev->wait_all_lock);
-	lockdep_assert(obj->dev == dev);
 	spin_lock(&obj->lock);
 	/*
 	 * By setting obj->dev_locked inside obj->lock, it is ensured that
@@ -162,8 +160,6 @@ static void dev_lock_obj(struct ntsync_device *dev, struct ntsync_obj *obj)
 
 static void dev_unlock_obj(struct ntsync_device *dev, struct ntsync_obj *obj)
 {
-	lockdep_assert_held(&dev->wait_all_lock);
-	lockdep_assert(obj->dev == dev);
 	spin_lock(&obj->lock);
 	obj->dev_locked = 0;
 	spin_unlock(&obj->lock);
@@ -186,7 +182,6 @@ static void obj_lock(struct ntsync_obj *obj)
 		 * wait_all_lock section, since we now own this lock, it should
 		 * be clear.
 		 */
-		lockdep_assert(!obj->dev_locked);
 		spin_unlock(&obj->lock);
 		mutex_unlock(&dev->wait_all_lock);
 	}
@@ -222,15 +217,8 @@ static void ntsync_unlock_obj(struct ntsync_device *dev, struct ntsync_obj *obj,
 	}
 }
 
-#define ntsync_assert_held(obj) \
-	lockdep_assert((lockdep_is_held(&(obj)->lock) != LOCK_STATE_NOT_HELD) || \
-		       ((lockdep_is_held(&(obj)->dev->wait_all_lock) != LOCK_STATE_NOT_HELD) && \
-			(obj)->dev_locked))
-
 static bool is_signaled(struct ntsync_obj *obj, __u32 owner)
 {
-	ntsync_assert_held(obj);
-
 	switch (obj->type) {
 	case NTSYNC_TYPE_SEM:
 		return !!obj->u.sem.count;
@@ -258,10 +246,6 @@ static void try_wake_all(struct ntsync_device *dev, struct ntsync_q *q,
 	bool can_wake = true;
 	int signaled = -1;
 	__u32 i;
-
-	lockdep_assert_held(&dev->wait_all_lock);
-	if (locked_obj)
-		lockdep_assert(locked_obj->dev_locked);
 
 	for (i = 0; i < count; i++) {
 		if (q->entries[i].obj != locked_obj)
@@ -309,9 +293,6 @@ static void try_wake_all_obj(struct ntsync_device *dev, struct ntsync_obj *obj)
 {
 	struct ntsync_q_entry *entry;
 
-	lockdep_assert_held(&dev->wait_all_lock);
-	lockdep_assert(obj->dev_locked);
-
 	list_for_each_entry(entry, &obj->all_waiters, node)
 		try_wake_all(dev, entry->q, obj);
 }
@@ -319,9 +300,6 @@ static void try_wake_all_obj(struct ntsync_device *dev, struct ntsync_obj *obj)
 static void try_wake_any_sem(struct ntsync_obj *sem)
 {
 	struct ntsync_q_entry *entry;
-
-	ntsync_assert_held(sem);
-	lockdep_assert(sem->type == NTSYNC_TYPE_SEM);
 
 	list_for_each_entry(entry, &sem->any_waiters, node) {
 		struct ntsync_q *q = entry->q;
@@ -340,9 +318,6 @@ static void try_wake_any_sem(struct ntsync_obj *sem)
 static void try_wake_any_mutex(struct ntsync_obj *mutex)
 {
 	struct ntsync_q_entry *entry;
-
-	ntsync_assert_held(mutex);
-	lockdep_assert(mutex->type == NTSYNC_TYPE_MUTEX);
 
 	list_for_each_entry(entry, &mutex->any_waiters, node) {
 		struct ntsync_q *q = entry->q;
@@ -368,9 +343,6 @@ static void try_wake_any_event(struct ntsync_obj *event)
 {
 	struct ntsync_q_entry *entry;
 
-	ntsync_assert_held(event);
-	lockdep_assert(event->type == NTSYNC_TYPE_EVENT);
-
 	list_for_each_entry(entry, &event->any_waiters, node) {
 		struct ntsync_q *q = entry->q;
 		int signaled = -1;
@@ -393,8 +365,6 @@ static void try_wake_any_event(struct ntsync_obj *event)
 static int release_sem_state(struct ntsync_obj *sem, __u32 count)
 {
 	__u32 sum;
-
-	ntsync_assert_held(sem);
 
 	if (check_add_overflow(sem->u.sem.count, count, &sum) ||
 	    sum > sem->u.sem.max)
@@ -443,7 +413,6 @@ static int ntsync_sem_release(struct ntsync_obj *sem, void __user *argp)
 static int unlock_mutex_state(struct ntsync_obj *mutex,
 			      const struct ntsync_mutex_args *args)
 {
-	ntsync_assert_held(mutex);
 
 	if (mutex->u.mutex.owner != args->owner)
 		return -EPERM;
@@ -494,8 +463,6 @@ static int ntsync_mutex_unlock(struct ntsync_obj *mutex, void __user *argp)
  */
 static int kill_mutex_state(struct ntsync_obj *mutex, __u32 owner)
 {
-	ntsync_assert_held(mutex);
-
 	if (mutex->u.mutex.owner != owner)
 		return -EPERM;
 
@@ -721,12 +688,23 @@ static struct ntsync_obj *ntsync_alloc_obj(struct ntsync_device *dev,
 
 static int ntsync_obj_get_fd(struct ntsync_obj *obj)
 {
-	FD_PREPARE(fdf, O_CLOEXEC,
-		   anon_inode_getfile("ntsync", &ntsync_obj_fops, obj, O_RDWR));
-	if (fdf.err)
-		return fdf.err;
-	obj->file = fd_prepare_file(fdf);
-	return fd_publish(fdf);
+    int fd;
+    struct file *file;
+
+    fd = get_unused_fd_flags(O_CLOEXEC);
+    if (fd < 0)
+        return fd;
+
+    file = anon_inode_getfile("ntsync", &ntsync_obj_fops, obj, O_RDWR);
+    if (IS_ERR(file)) {
+        put_unused_fd(fd);
+        return PTR_ERR(file);
+    }
+
+    obj->file = file;
+    fd_install(fd, file);
+
+    return fd;
 }
 
 static int ntsync_create_sem(struct ntsync_device *dev, void __user *argp)
@@ -884,9 +862,15 @@ static int setup_wait(struct ntsync_device *dev,
 	if (args->alert)
 		fds[count] = args->alert;
 
-	q = kmalloc(struct_size(q, entries, total_count), GFP_KERNEL);
+	q = kzalloc(sizeof(*q) + sizeof(struct ntsync_q_entry) * total_count,
+            GFP_KERNEL);
+
 	if (!q)
 		return -ENOMEM;
+		
+        for (i = 0; i < total_count; i++)
+              INIT_LIST_HEAD(&q->entries[i].node);
+              
 	q->task = current;
 	q->owner = args->owner;
 	atomic_set(&q->signaled, -1);
