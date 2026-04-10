@@ -16,12 +16,21 @@
 #include <linux/mutex.h>
 #include <linux/overflow.h>
 #include <linux/sched.h>
-#include <linux/sched/signal.h>
+#include <linux/signal.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
+#include <linux/uaccess.h>
+#include <linux/compat.h>
 #include <uapi/linux/ntsync.h>
 
 #define NTSYNC_NAME	"ntsync"
+
+static long compat_ptr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	if (!file->f_op->unlocked_ioctl)
+		return -ENOIOCTLCMD;
+	return file->f_op->unlocked_ioctl(file, cmd, (unsigned long)compat_ptr(arg));
+}
 
 enum ntsync_type {
 	NTSYNC_TYPE_SEM,
